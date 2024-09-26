@@ -1,0 +1,175 @@
+import pandas as pd
+import os
+import shutil
+import logging
+from tqdm import tqdm
+from datetime import datetime
+import tkinter as tk
+from tkinter import messagebox
+from tkinter import filedialog
+
+# Configurazione del logging
+def setup_logging():
+    """Configura il logging per registrare eventi e errori in un file."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))  # Directory del file eseguibile
+    log_folder = os.path.join(script_dir, 'log')
+    if not os.path.exists(log_folder):
+        os.makedirs(log_folder)
+    log_file = os.path.join(log_folder, 'split_csv.log')
+    logging.basicConfig(filename=log_file, level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+def validate_file(file_path):
+    """Verifica se il file selezionato ha un'estensione valida per CSV."""
+    if not file_path.lower().endswith('.csv'):
+        messagebox.showerror("Errore", "Il file selezionato non è un file CSV valido.")
+        return False
+    return True
+
+def check_file_structure(df, rows_to_skip):
+    """Controlla la struttura del DataFrame e avvisa se contiene meno righe di quelle richieste."""
+    if len(df) <= rows_to_skip:
+        messagebox.showinfo("Informazione", "Il file contiene meno righe di quelle richieste. Verranno elaborate tutte le righe disponibili.")
+    return True
+
+def split_csv_file(file_path, output_folder, base_file_name, rows_to_skip, rows_per_file):
+    """Suddivide il file CSV in più file di output, mantenendo l'intestazione."""
+    try:
+        # Creare la cartella di output se non esiste
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+            logging.info(f'Cartella di output creata: {output_folder}')
+
+        # Leggere il file CSV originale usando il punto e virgola come delimitatore
+        df = pd.read_csv(file_path, delimiter=';', skiprows=rows_to_skip, dtype=str)  # Forzare a leggere come stringa
+        logging.info(f'File CSV letto correttamente: {file_path}')
+
+        # Controllare se il file contiene meno righe di quelle richieste
+        check_file_structure(df, rows_to_skip)
+
+        # Resettare l'indice
+        df.reset_index(drop=True, inplace=True)
+
+        # Calcolare il numero di file necessari
+        total_rows = len(df)
+        num_files = (total_rows // rows_per_file) + (1 if total_rows % rows_per_file != 0 else 0)
+
+        # Aggiungere una barra di caricamento
+        with tqdm(total=num_files, desc="Suddivisione file", unit="file") as pbar:
+            # Dividere il file in più file da rows_per_file righe ciascuno
+            for i in range(num_files):
+                start_row = i * rows_per_file
+                end_row = start_row + rows_per_file
+                split_df = df.iloc[start_row:end_row]
+
+                # Nominare il file con il nome originale e il numero sequenziale
+                output_file_name = f'{base_file_name}_part_{i + 1}.csv'
+                output_file = os.path.join(output_folder, output_file_name)
+
+                # Salvare il file risultante
+                split_df.to_csv(output_file, sep=';', index=False)
+                pbar.update(1)  # Aggiornare la barra di progresso
+
+                logging.info(f'File creato: {output_file}')
+
+    except Exception as e:
+        logging.error(f"Errore durante la suddivisione del file: {str(e)}")
+        messagebox.showerror("Errore", f"Errore: {str(e)}")
+
+def process_files(file_path, rows_to_skip, rows_per_file):
+    """Gestisce il processo di suddivisione, compresa la creazione di backup e storico."""
+    try:
+        # Cartelle
+        script_dir = os.path.dirname(os.path.abspath(__file__))  # Directory del file eseguibile
+        storico_folder = os.path.join(script_dir, 'storico')
+        backup_folder = os.path.join(script_dir, 'backup')
+        log_folder = os.path.join(script_dir, 'log')
+
+        # Creare le cartelle "storico", "backup", e "log" se non esistono
+        for folder in [storico_folder, backup_folder, log_folder]:
+            if not os.path.exists(folder):
+                os.makedirs(folder)
+
+        # Nome del file CSV
+        csv_file = os.path.basename(file_path)
+
+        # Nome della cartella di output basato sul nome del file (senza estensione)
+        output_folder_name = os.path.splitext(csv_file)[0]
+        output_folder = os.path.join(script_dir, output_folder_name)
+
+        # Nome di base per i file di output (senza estensione)
+        base_file_name = os.path.splitext(csv_file)[0]
+
+        # Creare una copia di backup del file originale
+        backup_file = os.path.join(backup_folder, csv_file)
+        shutil.copy(file_path, backup_file)
+        logging.info(f'Backup creato: {backup_file}')
+
+        # Dividere il file CSV
+        split_csv_file(file_path, output_folder, base_file_name, rows_to_skip, rows_per_file)
+
+        # Spostare il file originale nella cartella "storico"
+        shutil.move(file_path, os.path.join(storico_folder, csv_file))
+        logging.info(f'File originale spostato nella cartella {storico_folder}.')
+
+        # Notifica di completamento
+        messagebox.showinfo("Completato", f"Processo completato! I file sono stati suddivisi e salvati in {output_folder}.\nIl file originale è stato spostato nella cartella {storico_folder}.")
+        logging.info('Processo completato con successo.')
+
+    except Exception as e:
+        logging.error(f"Errore durante l'elaborazione del file: {str(e)}")
+        messagebox.showerror("Errore", f"Errore: {str(e)}")
+
+def browse_file():
+    """Apre una finestra di dialogo per selezionare un file CSV."""
+    file_path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv")])
+    if file_path:
+        file_entry.delete(0, tk.END)
+        file_entry.insert(0, file_path)
+
+def start_process():
+    """Avvia il processo di suddivisione, recuperando le impostazioni dall'interfaccia utente."""
+    file_path = file_entry.get()
+    if not file_path:
+        messagebox.showwarning("Avviso", "Per favore, seleziona un file CSV.")
+        return
+
+    if not validate_file(file_path):
+        return
+
+    try:
+        rows_to_skip = int(rows_to_skip_entry.get())
+        rows_per_file = int(rows_per_file_entry.get())
+
+        if rows_to_skip < 0 or rows_per_file <= 0:
+            raise ValueError("Il numero di righe deve essere positivo.")
+
+        process_files(file_path, rows_to_skip, rows_per_file)
+
+    except ValueError as e:
+        messagebox.showerror("Errore di input", f"Errore: {str(e)}")
+
+# Creare la finestra principale
+root = tk.Tk()
+root.title("Suddivisione File CSV")
+
+# Layout
+tk.Label(root, text="Seleziona file CSV:").grid(row=0, column=0, padx=10, pady=10, sticky="e")
+file_entry = tk.Entry(root, width=50)
+file_entry.grid(row=0, column=1, padx=10, pady=10)
+tk.Button(root, text="Sfoglia", command=browse_file).grid(row=0, column=2, padx=10, pady=10)
+
+tk.Label(root, text="Righe da scartare:").grid(row=1, column=0, padx=10, pady=10, sticky="e")
+rows_to_skip_entry = tk.Entry(root, width=10)
+rows_to_skip_entry.insert(0, "5")
+rows_to_skip_entry.grid(row=1, column=1, padx=10, pady=10, sticky="w")
+
+tk.Label(root, text="Righe per file:").grid(row=2, column=0, padx=10, pady=10, sticky="e")
+rows_per_file_entry = tk.Entry(root, width=10)
+rows_per_file_entry.insert(0, "999")
+rows_per_file_entry.grid(row=2, column=1, padx=10, pady=10, sticky="w")
+
+tk.Button(root, text="Esegui", command=start_process).grid(row=4, column=0, columnspan=3, padx=10, pady=20)
+
+setup_logging()
+root.mainloop()
